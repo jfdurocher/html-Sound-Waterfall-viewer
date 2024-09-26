@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Digital Mode Soundcard Waterfall Viewer</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+            background-color: #000;
+            color: #fff;
+        }
+        canvas {
+            border: 1px solid #fff;
+            background-color: #000;
+        }
+        .controls {
+            margin: 10px;
+            color: #fff;
+        }
+    </style>
+</head>
+<body>
+    <h1>Digital Mode Soundcard Waterfall Viewer</h1>
+    <canvas id="waterfallCanvas"></canvas>
+    <div class="controls">
+        <label for="zoom">Zoom (Frequency Range): </label>
+        <input type="range" id="zoom" min="1" max="4" value="2" step="0.1">
+        <label id="zoomLabel">2x</label>
+    </div>
+    <div class="controls">
+        <label for="speed">Scroll Speed: </label>
+        <input type="range" id="speed" min="50" max="500" value="100">
+        <label id="speedLabel">100 ms</label>
+    </div>
+    <p id="status">Waiting for microphone access...</p>
+    <script>
+        async function startWaterfall() {
+            const canvas = document.getElementById('waterfallCanvas');
+            const ctx = canvas.getContext('2d');
+            const status = document.getElementById('status');
+            const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            const analyser = audioCtx.createAnalyser();
+            analyser.fftSize = 2048; // Higher FFT size for detailed frequency resolution
+            analyser.smoothingTimeConstant = 0.8; // Smooth out the frequency changes
+            const bufferLength = analyser.frequencyBinCount;
+            const dataArray = new Uint8Array(bufferLength);
+            const sampleRate = audioCtx.sampleRate;
+
+            // Resize canvas to fit the window and set an appropriate height for the waterfall
+            function resizeCanvas() {
+                canvas.width = window.innerWidth * 0.9;
+                canvas.height = window.innerHeight * 0.6;
+            }
+            resizeCanvas();
+            window.addEventListener('resize', resizeCanvas);
+
+            try {
+                // Request microphone access
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                const source = audioCtx.createMediaStreamSource(stream);
+                source.connect(analyser);
+                status.textContent = 'Microphone access granted. Visualizing...';
+            } catch (err) {
+                console.error('Error accessing audio input:', err);
+                status.textContent = 'Microphone access denied or unavailable.';
+                return;
+            }
+
+            const waterfallHeight = canvas.height;
+            const waterfallWidth = canvas.width;
+            let minFrequencyIndex = 0; // Start with the lowest frequency
+            let maxFrequencyIndex = bufferLength / 4; // Default frequency range (0-4000 Hz)
+            const scrollAmount = 2; // Scroll the canvas by 2 pixels for smoother visual effect
+            let updateInterval = 100; // Default update interval (in milliseconds)
+
+            // Zoom and speed controls
+            const zoomSlider = document.getElementById('zoom');
+            const zoomLabel = document.getElementById('zoomLabel');
+            const speedSlider = document.getElementById('speed');
+            const speedLabel = document.getElementById('speedLabel');
+
+            // Update zoom level
+            zoomSlider.addEventListener('input', () => {
+                const zoomFactor = parseFloat(zoomSlider.value);
+                maxFrequencyIndex = bufferLength / (4 / zoomFactor); // Adjust the frequency range based on zoom
+                zoomLabel.textContent = `${zoomFactor}x`;
+            });
+
+            // Update scroll speed
+            speedSlider.addEventListener('input', () => {
+                updateInterval = parseInt(speedSlider.value);
+                speedLabel.textContent = `${updateInterval} ms`;
+            });
+
+            // Function to draw the frequency scale at the top
+            function drawFrequencyScale() {
+                ctx.clearRect(0, 0, waterfallWidth, 20); // Clear the area for the scale
+                ctx.fillStyle = '#fff';
+                ctx.font = '12px Arial';
+                ctx.textAlign = 'center';
+
+                const nyquist = sampleRate / 2; // Nyquist frequency
+                const frequencyStep = nyquist / bufferLength; // Frequency step per bin
+
+                for (let i = minFrequencyIndex; i < maxFrequencyIndex; i += 50) {
+                    const frequency = (i * frequencyStep).toFixed(0);
+                    const x = ((i - minFrequencyIndex) / (maxFrequencyIndex - minFrequencyIndex)) * waterfallWidth;
+                    ctx.fillText(`${frequency} Hz`, x, 15); // Draw frequency labels
+                }
+            }
+
+            // Control the waterfall update rate
+            let lastUpdateTime = 0;
+
+            function drawWaterfall(timestamp) {
+                if (timestamp - lastUpdateTime < updateInterval) {
+                    requestAnimationFrame(drawWaterfall);
+                    return; // Skip this frame if not enough time has passed
+                }
+                lastUpdateTime = timestamp;
+
+                analyser.getByteFrequencyData(dataArray);
+
+                // Scroll the canvas up by scrollAmount pixels
+                const imageData = ctx.getImageData(0, scrollAmount, waterfallWidth, waterfallHeight - scrollAmount);
+                ctx.putImageData(imageData, 0, 0);
+
+                // Clear the bottom scrollAmount pixels
+                ctx.clearRect(0, waterfallHeight - scrollAmount, waterfallWidth, scrollAmount);
+
+                // Draw the new frequency data at the bottom
+                const barWidth = waterfallWidth / (maxFrequencyIndex - minFrequencyIndex);
+                for (let i = minFrequencyIndex; i < maxFrequencyIndex; i++) {
+                    const value = dataArray[i];
+                    const percent = value / 255;
+                    const hue = (1 - percent) * 240; // Adjust hue from blue to red based on amplitude
+                    ctx.fillStyle = `hsl(${hue}, 100%, 50%)`;
+                    ctx.fillRect((i - minFrequencyIndex) * barWidth, waterfallHeight - scrollAmount, barWidth, scrollAmount);
+                }
+
+                // Draw the frequency scale
+                drawFrequencyScale();
+
+                requestAnimationFrame(drawWaterfall);
+            }
+
+            requestAnimationFrame(drawWaterfall);
+        }
+
+        startWaterfall();
+    </script>
+</body>
+</html>
